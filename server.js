@@ -8,11 +8,14 @@ dotenv.config();
 const app = express();
 
 // 🔥 Supabase client (replaces Sequelize + db.js)
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
+  throw new Error("❌ Missing Supabase environment variables");
+}
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
 );
-
 // Middleware
 const CLIENT_URL =
   process.env.CLIENT_URL ||
@@ -29,12 +32,17 @@ app.use(express.json());
 
 // 🔥 Supabase connection test (replaces sequelize.authenticate)
 (async () => {
-  const { error } = await supabase.from('plans').select('*').limit(1);
+  try {
+    const { data, error } = await supabase
+      .from('plans')
+      .select('id')
+      .limit(1);
 
-  if (error) {
-    console.log('❌ Supabase connection error:', error.message);
-  } else {
-    console.log('✓ Supabase connected');
+    if (error) throw error;
+
+    console.log('✓ Supabase connected and plans table accessible');
+  } catch (err) {
+    console.error('❌ Supabase error:', err.message);
   }
 })();
 
