@@ -41,7 +41,17 @@ app.get('/api/plans', async (req, res) => {
 
     if (error) throw error;
 
-    res.json(data);
+    // 🔥 Convert USD → FCFA here
+    const rate = 600;
+
+    const transformedPlans = data.map(plan => ({
+      ...plan,
+      price: Math.round(plan.price * rate),
+      currency: 'FCFA'
+    }));
+
+    res.json(transformedPlans);
+
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
