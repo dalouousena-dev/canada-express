@@ -156,3 +156,54 @@ const PORT = process.env.PORT || 5000;
     process.exit(1);
   }
 })();
+app.post('/api/pay', async (req, res) => {
+  try {
+    const { amount, plan, phone, operator, userId } = req.body;
+
+    if (!amount || !phone || !operator || !userId) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
+
+    const reference = `ORDER-${Date.now()}`;
+
+    // 🔥 1. Save transaction FIRST (critical)
+    const { error: insertError } = await supabase
+      .from('transactions')
+      .insert([{
+        user_id: userId,
+        plan,
+        amount,
+        status: 'pending',
+        reference
+      }]);
+
+    if (insertError) throw insertError;
+
+    // 🔥 2. Call Ashtech API
+    const fetch = (...args) =>
+      import('node-fetch').then(({ default: fetch }) => fetch(...args));
+
+    const response = await fetch('https://api.ashtechpay.top/v1/collect', {
+      method: 'POST',
+      headers: {
+        "Authorization": `Bearer ${process.env.ASHTECH_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        amount,
+        currency: "XAF",
+        phone,
+        operator,
+        reference
+      })
+    });
+
+    const data = await response.json();
+
+    res.json(data);
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
