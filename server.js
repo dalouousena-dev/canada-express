@@ -8,30 +8,59 @@ const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 
-// 🔥 HARD FAIL if env missing
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
-  throw new Error("Missing Supabase environment variables");
+// ==========================
+// ENV CHECK
+// ==========================
+if (
+  !process.env.SUPABASE_URL ||
+  !process.env.SUPABASE_KEY ||
+  !process.env.ASHTECH_API_KEY
+) {
+  throw new Error("Missing environment variables");
 }
 
-// 🔥 Supabase client
+// ==========================
+// SUPABASE
+// ==========================
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
 );
 
-// Middleware
+// ==========================
+// MIDDLEWARE
+// ==========================
 app.use(cors());
 app.use(express.json());
 
 // ==========================
-// HEALTH CHECK
+// AUTH MIDDLEWARE
+// ==========================
+const authenticate = (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || "secret");
+    req.user = decoded;
+    next();
+  } catch {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+};
+
+// ==========================
+// HEALTH
 // ==========================
 app.get('/api/health', (req, res) => {
   res.json({ status: 'Server running' });
 });
 
 // ==========================
-// PLANS ROUTES
+// PLANS
 // ==========================
 app.get('/api/plans', async (req, res) => {
   try {
@@ -41,16 +70,15 @@ app.get('/api/plans', async (req, res) => {
 
     if (error) throw error;
 
-    // 🔥 Convert USD → FCFA here
     const rate = 600;
 
-    const transformedPlans = data.map(plan => ({
+    const transformed = data.map(plan => ({
       ...plan,
       price: Math.round(plan.price * rate),
       currency: 'FCFA'
     }));
 
-    res.json(transformedPlans);
+    res.json(transformed);
 
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -58,25 +86,7 @@ app.get('/api/plans', async (req, res) => {
 });
 
 // ==========================
-// CONTENT ROUTES
-// ==========================
-app.get('/api/content', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('contents')
-      .select('*')
-      .order('order', { ascending: true });
-
-    if (error) throw error;
-
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ==========================
-// AUTH ROUTES
+// AUTH
 // ==========================
 
 // REGISTER
@@ -84,16 +94,17 @@ app.post('/api/auth/register', async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashed = await bcrypt.hash(password, 10);
 
     const { data, error } = await supabase
       .from('users')
-      .insert([{ email, password: hashedPassword }])
+      .insert([{ email, password: hashed }])
       .select();
 
     if (error) throw error;
 
     res.json(data);
+
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -132,41 +143,20 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // ==========================
-// SERVER START (SAFE)
+// PAYMENT ROUTE
 // ==========================
-const PORT = process.env.PORT || 5000;
-
-(async () => {
+app.post('/api/pay', authenticate, async (req, res) => {
   try {
-    const { error } = await supabase
-      .from('plans')
-      .select('id')
-      .limit(1);
+    const { amount, plan, phone, operator } = req.body;
+    const userId = req.user.userId;
 
-    if (error) throw error;
-
-    console.log('✓ Supabase connected');
-
-    app.listen(PORT, () => {
-      console.log(`✓ Server running on port ${PORT}`);
-    });
-
-  } catch (err) {
-    console.error('❌ Supabase connection failed:', err.message);
-    process.exit(1);
-  }
-})();
-app.post('/api/pay', async (req, res) => {
-  try {
-    const { amount, plan, phone, operator, userId } = req.body;
-
-    if (!amount || !phone || !operator || !userId) {
+    if (!amount || !phone || !operator) {
       return res.status(400).json({ error: "Missing fields" });
     }
 
     const reference = `ORDER-${Date.now()}`;
 
-    // 🔥 1. Save transaction FIRST (critical)
+    // 1. Save transaction
     const { error: insertError } = await supabase
       .from('transactions')
       .insert([{
@@ -179,7 +169,7 @@ app.post('/api/pay', async (req, res) => {
 
     if (insertError) throw insertError;
 
-    // 🔥 2. Call Ashtech API
+    // 2. Call Ashtech API
     const fetch = (...args) =>
       import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
@@ -200,10 +190,61 @@ app.post('/api/pay', async (req, res) => {
 
     const data = await response.json();
 
-    res.json(data);
+    res.json({
+      ...data,
+      reference
+    });
 
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
+
+// ==========================
+// VERIFY PAYMENT (BASIC)
+// ==========================
+app.get('/api/verify/:reference', authenticate, async (req, res) => {
+  try {
+    const { reference } = req.params;
+
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('reference', reference)
+      .single();
+
+    if (error) throw error;
+
+    res.json(data);
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================
+// START SERVER
+// ==========================
+const PORT = process.env.PORT || 5000;
+
+(async () => {
+  try {
+    const { error } = await supabase
+      .from('plans')
+      .select('id')
+      .limit(1);
+
+    if (error) throw error;
+
+    console.log('✓ Supabase connected');
+
+    app.listen(PORT, () => {
+      console.log(`✓ Server running on port ${PORT}`);
+    });
+
+  } catch (err) {
+    console.error('❌ Supabase failed:', err.message);
+    process.exit(1);
+  }
+})();
