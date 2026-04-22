@@ -4,6 +4,9 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const fetch = (...args) =>
+  import('node-fetch').then(({ default: fetch }) => fetch(...args));
+
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
@@ -11,11 +14,7 @@ const app = express();
 // ==========================
 // ENV CHECK
 // ==========================
-if (
-  !process.env.SUPABASE_URL ||
-  !process.env.SUPABASE_KEY ||
-  !process.env.ASHTECH_API_KEY
-) {
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY || !process.env.JWT_SECRET) {
   throw new Error("Missing environment variables");
 }
 
@@ -36,20 +35,42 @@ app.use(express.json());
 // ==========================
 // AUTH MIDDLEWARE
 // ==========================
-const authenticate = (req, res, next) => {
+const authenticate = async (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
 
-  if (!token) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || "secret");
-    req.user = decoded;
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // 🔥 Fetch user from DB (never trust token only)
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', decoded.userId)
+      .single();
+
+    if (error || !user) {
+      return res.status(401).json({ error: 'Invalid user' });
+    }
+
+    req.user = user;
     next();
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
   }
+};
+
+// ==========================
+// PLAN PROTECTION
+// ==========================
+const requirePlan = (plan) => {
+  return (req, res, next) => {
+    if (req.user.plan !== plan) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    next();
+  };
 };
 
 // ==========================
@@ -60,50 +81,31 @@ app.get('/api/health', (req, res) => {
 });
 
 // ==========================
-// PLANS
-// ==========================
-app.get('/api/plans', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('plans')
-      .select('*');
-
-    if (error) throw error;
-
-    const rate = 600;
-
-    const transformed = data.map(plan => ({
-      ...plan,
-      price: Math.round(plan.price * rate),
-      currency: 'FCFA'
-    }));
-
-    res.json(transformed);
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ==========================
 // AUTH
 // ==========================
 
 // REGISTER
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, plan } = req.body;
 
     const hashed = await bcrypt.hash(password, 10);
 
     const { data, error } = await supabase
       .from('users')
-      .insert([{ email, password: hashed }])
-      .select();
+      .insert([{ email, password: hashed, plan: plan || 'Basic Plan' }])
+      .select()
+      .single();
 
     if (error) throw error;
 
-    res.json(data);
+    const token = jwt.sign(
+      { userId: data.id },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({ token, user: data });
 
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -115,27 +117,29 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const { data, error } = await supabase
+    const { data: user, error } = await supabase
       .from('users')
       .select('*')
       .eq('email', email)
       .single();
 
-    if (error) throw error;
+    if (error || !user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
 
-    const valid = await bcrypt.compare(password, data.password);
+    const valid = await bcrypt.compare(password, user.password);
 
     if (!valid) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     const token = jwt.sign(
-      { userId: data.id },
-      process.env.JWT_SECRET || "secret",
+      { userId: user.id },
+      process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
 
-    res.json({ token });
+    res.json({ token, user });
 
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -143,35 +147,26 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // ==========================
-// PAYMENT ROUTE
+// PAYMENT
 // ==========================
 app.post('/api/pay', authenticate, async (req, res) => {
   try {
     const { amount, plan, phone, operator } = req.body;
-    const userId = req.user.userId;
 
-    if (!amount || !phone || !operator) {
+    if (!amount || !plan || !phone || !operator) {
       return res.status(400).json({ error: "Missing fields" });
     }
 
     const reference = `ORDER-${Date.now()}`;
 
-    // 1. Save transaction
-    const { error: insertError } = await supabase
-      .from('transactions')
-      .insert([{
-        user_id: userId,
-        plan,
-        amount,
-        status: 'pending',
-        reference
-      }]);
-
-    if (insertError) throw insertError;
-
-    // 2. Call Ashtech API
-    const fetch = (...args) =>
-      import('node-fetch').then(({ default: fetch }) => fetch(...args));
+    // Save transaction
+    await supabase.from('transactions').insert([{
+      user_id: req.user.id,
+      plan,
+      amount,
+      status: 'pending',
+      reference
+    }]);
 
     const response = await fetch('https://api.ashtechpay.top/v1/collect', {
       method: 'POST',
@@ -190,37 +185,61 @@ app.post('/api/pay', authenticate, async (req, res) => {
 
     const data = await response.json();
 
-    res.json({
-      ...data,
-      reference
-    });
+    res.json({ ...data, reference });
 
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
 
 // ==========================
-// VERIFY PAYMENT (BASIC)
+// VERIFY PAYMENT + UPGRADE PLAN
 // ==========================
-app.get('/api/verify/:reference', authenticate, async (req, res) => {
+app.post('/api/verify', authenticate, async (req, res) => {
   try {
-    const { reference } = req.params;
+    const { reference } = req.body;
 
-    const { data, error } = await supabase
+    const { data: transaction } = await supabase
       .from('transactions')
       .select('*')
       .eq('reference', reference)
       .single();
 
-    if (error) throw error;
+    if (!transaction) {
+      return res.status(404).json({ error: 'Transaction not found' });
+    }
 
-    res.json(data);
+    // 🔥 SIMULATION (replace with real API check)
+    const paymentSuccess = true;
+
+    if (!paymentSuccess) {
+      return res.status(400).json({ error: 'Payment not confirmed' });
+    }
+
+    // 🔥 UPDATE USER PLAN
+    await supabase
+      .from('users')
+      .update({ plan: transaction.plan })
+      .eq('id', req.user.id);
+
+    // 🔥 UPDATE TRANSACTION
+    await supabase
+      .from('transactions')
+      .update({ status: 'completed' })
+      .eq('reference', reference);
+
+    res.json({ message: 'Payment verified, plan upgraded' });
 
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ==========================
+// PROTECTED CONTENT EXAMPLE
+// ==========================
+app.get('/api/premium', authenticate, requirePlan('Premium Plan'), (req, res) => {
+  res.json({ message: 'Premium content' });
 });
 
 // ==========================
@@ -228,23 +247,6 @@ app.get('/api/verify/:reference', authenticate, async (req, res) => {
 // ==========================
 const PORT = process.env.PORT || 5000;
 
-(async () => {
-  try {
-    const { error } = await supabase
-      .from('plans')
-      .select('id')
-      .limit(1);
-
-    if (error) throw error;
-
-    console.log('✓ Supabase connected');
-
-    app.listen(PORT, () => {
-      console.log(`✓ Server running on port ${PORT}`);
-    });
-
-  } catch (err) {
-    console.error('❌ Supabase failed:', err.message);
-    process.exit(1);
-  }
-})();
+app.listen(PORT, () => {
+  console.log(`✓ Server running on port ${PORT}`);
+});
