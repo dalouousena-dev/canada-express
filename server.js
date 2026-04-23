@@ -13,7 +13,12 @@ const app = express();
 // ==========================
 app.use(cors());
 app.use(express.json());
-
+// 🔥 ADD THIS BLOCK HERE
+// ==========================
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
 
 // ==========================
 // 🔥 PLAN SYSTEM (PUT IT HERE)
