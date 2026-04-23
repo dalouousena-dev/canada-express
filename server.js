@@ -96,13 +96,11 @@ app.get('/api/health', (req, res) => {
 // ==========================
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { email, password, plan } = req.body;
+    const { email, password } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Missing fields' });
     }
-
-    const normalizedPlan = normalizePlan(plan);
 
     const hashed = await bcrypt.hash(password, 10);
 
@@ -111,7 +109,7 @@ app.post('/api/auth/register', async (req, res) => {
       .insert([{
         email,
         password: hashed,
-        plan: normalizedPlan // ✅ ALWAYS CLEAN VALUE
+        plan: null // ❌ NO PLAN YET
       }])
       .select()
       .single();
@@ -131,6 +129,25 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
+app.post('/api/payment/confirm', authenticate, async (req, res) => {
+  try {
+    const { plan } = req.body;
+
+    const normalizedPlan = normalizePlan(plan);
+
+    const { error } = await supabase
+      .from('users')
+      .update({ plan: normalizedPlan })
+      .eq('id', req.user.id);
+
+    if (error) throw error;
+
+    res.json({ success: true, plan: normalizedPlan });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 // ==========================
 // LOGIN (UNCHANGED BUT SAFE)
 // ==========================
