@@ -164,7 +164,12 @@ app.post('/api/auth/register', async (req, res) => {
       { expiresIn: '7d' }
     );
 
-    res.json({ token, user: data });
+    const { password, ...safeUser } = newUser;
+
+res.json({
+  token,
+  user: safeUser
+});
 
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -204,7 +209,12 @@ app.post('/api/auth/login', async (req, res) => {
       { expiresIn: '7d' }
     );
 
-    res.json({ token, user });
+  const { password, ...safeUser } = user;
+
+res.json({
+  token,
+  user: safeUser
+});
 
   } catch (err) {
     res.status(500).json({ error: err.message });
