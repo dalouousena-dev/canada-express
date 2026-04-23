@@ -205,17 +205,35 @@ app.get('/api/plans', async (req, res) => {
 
     if (error) throw error;
 
-    res.json(data);
+    // 🔥 FORCE CORRECT VALUES
+    const normalizedPlans = data.map((plan) => {
+      let type = 'basic';
+      let price = 6000;
+
+      const name = plan.name?.en?.toLowerCase() || '';
+
+      if (name.includes('premium')) {
+        type = 'premium';
+        price = 13000;
+      } else if (name.includes('enterprise')) {
+        type = 'enterprise';
+        price = 25000;
+      }
+
+      return {
+        ...plan,
+        type,
+        price,               // ✅ FORCE CORRECT PRICE
+        currency: 'FCFA',    // ✅ FORCE CURRENCY
+      };
+    });
+
+    res.json(normalizedPlans);
 
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
-
-// ==========================
-// START SERVER
-// ==========================
-const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
   console.log(`✓ Server running on port ${PORT}`);
