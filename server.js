@@ -98,9 +98,33 @@ app.get('/api/health', (req, res) => {
 });
 
 // ==========================
-// REGISTER (FIXED)
+// CONSULTATION ROUTE
 // ==========================
-// ==========================
+app.post('/api/consultation', authenticate, async (req, res) => {
+  try {
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: 'Message required' });
+    }
+
+    const { data, error } = await supabase
+      .from('consultations')
+      .insert([
+        {
+          user_id: req.user.id,
+          message
+        }
+      ]);
+
+    if (error) throw error;
+
+    res.json({ success: true });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 // REGISTER
 // ==========================
 app.post('/api/auth/register', async (req, res) => {
