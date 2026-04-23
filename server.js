@@ -96,11 +96,20 @@ app.get('/api/health', (req, res) => {
 // ==========================
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    let { email, password, plan } = req.body;
+
+    console.log("REGISTER BODY:", req.body); // 🔍 DEBUG
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Missing fields' });
     }
+
+    // 🔥 FORCE PLAN (CRITICAL FIX)
+    if (!plan) {
+      plan = 'basic';
+    }
+
+    const normalizedPlan = normalizePlan(plan);
 
     const hashed = await bcrypt.hash(password, 10);
 
@@ -109,12 +118,15 @@ app.post('/api/auth/register', async (req, res) => {
       .insert([{
         email,
         password: hashed,
-        plan: null // ❌ NO PLAN YET
+        plan: normalizedPlan // ✅ NEVER NULL
       }])
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error("SUPABASE ERROR:", error);
+      return res.status(400).json({ error: error.message });
+    }
 
     const token = jwt.sign(
       { userId: data.id },
@@ -125,26 +137,7 @@ app.post('/api/auth/register', async (req, res) => {
     res.json({ token, user: data });
 
   } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/payment/confirm', authenticate, async (req, res) => {
-  try {
-    const { plan } = req.body;
-
-    const normalizedPlan = normalizePlan(plan);
-
-    const { error } = await supabase
-      .from('users')
-      .update({ plan: normalizedPlan })
-      .eq('id', req.user.id);
-
-    if (error) throw error;
-
-    res.json({ success: true, plan: normalizedPlan });
-
-  } catch (err) {
+    console.error("REGISTER ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -154,6 +147,8 @@ app.post('/api/payment/confirm', authenticate, async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
+
+    console.log("LOGIN:", email);
 
     const { data: user, error } = await supabase
       .from('users')
@@ -180,10 +175,10 @@ app.post('/api/auth/login', async (req, res) => {
     res.json({ token, user });
 
   } catch (err) {
+    console.error("LOGIN ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 });
-
 // ==========================
 // PROTECTED ROUTES (FIXED)
 // ==========================
