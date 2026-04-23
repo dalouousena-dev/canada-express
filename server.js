@@ -30,6 +30,21 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================
+// 🔥 PLAN NORMALIZER (CRITICAL)
+// ==========================
+const normalizePlan = (plan) => {
+  if (!plan) return 'basic';
+
+  const p = plan.toLowerCase();
+
+  if (p.includes('basic')) return 'basic';
+  if (p.includes('premium')) return 'premium';
+  if (p.includes('enterprise')) return 'enterprise';
+
+  return 'basic';
+};
+
+// ==========================
 // AUTH MIDDLEWARE
 // ==========================
 const authenticate = async (req, res, next) => {
@@ -58,7 +73,7 @@ const authenticate = async (req, res, next) => {
 };
 
 // ==========================
-// PLAN PROTECTION
+// PLAN PROTECTION (FIXED)
 // ==========================
 const requirePlan = (plan) => {
   return (req, res, next) => {
@@ -77,15 +92,17 @@ app.get('/api/health', (req, res) => {
 });
 
 // ==========================
-// REGISTER
+// REGISTER (FIXED)
 // ==========================
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { email, password, plan } = req.body;
 
-    if (!email || !password || !plan) {
+    if (!email || !password) {
       return res.status(400).json({ error: 'Missing fields' });
     }
+
+    const normalizedPlan = normalizePlan(plan);
 
     const hashed = await bcrypt.hash(password, 10);
 
@@ -94,7 +111,7 @@ app.post('/api/auth/register', async (req, res) => {
       .insert([{
         email,
         password: hashed,
-        plan // 🔥 IMPORTANT: use exact plan from frontend
+        plan: normalizedPlan // ✅ ALWAYS CLEAN VALUE
       }])
       .select()
       .single();
@@ -115,7 +132,7 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 // ==========================
-// LOGIN
+// LOGIN (UNCHANGED BUT SAFE)
 // ==========================
 app.post('/api/auth/login', async (req, res) => {
   try {
@@ -151,10 +168,18 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // ==========================
-// PROTECTED EXAMPLE
+// PROTECTED ROUTES (FIXED)
 // ==========================
-app.get('/api/premium', authenticate, requirePlan('Premium Plan'), (req, res) => {
+app.get('/api/basic', authenticate, requirePlan('basic'), (req, res) => {
+  res.json({ message: 'Basic content' });
+});
+
+app.get('/api/premium', authenticate, requirePlan('premium'), (req, res) => {
   res.json({ message: 'Premium content' });
+});
+
+app.get('/api/enterprise', authenticate, requirePlan('enterprise'), (req, res) => {
+  res.json({ message: 'Enterprise content' });
 });
 
 // ==========================
