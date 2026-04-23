@@ -9,29 +9,21 @@ const { createClient } = require('@supabase/supabase-js');
 const app = express();
 
 // ==========================
-// ENV CHECK
-// ==========================
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY || !process.env.JWT_SECRET) {
-  throw new Error("Missing environment variables");
-}
-
-// ==========================
-// SUPABASE
-// ==========================
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
-);
-
-// ==========================
 // MIDDLEWARE
 // ==========================
 app.use(cors());
 app.use(express.json());
 
+
 // ==========================
-// 🔥 PLAN NORMALIZER (CRITICAL)
+// 🔥 PLAN SYSTEM (PUT IT HERE)
 // ==========================
+const planHierarchy = {
+  basic: 1,
+  premium: 2,
+  enterprise: 3
+};
+
 const normalizePlan = (plan) => {
   if (!plan) return 'basic';
 
@@ -46,6 +38,9 @@ const normalizePlan = (plan) => {
 
 // ==========================
 // AUTH MIDDLEWARE
+// ==========================
+// ==========================
+// AUTH MIDDLEWARE (FIXED)
 // ==========================
 const authenticate = async (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
@@ -65,21 +60,27 @@ const authenticate = async (req, res, next) => {
       return res.status(401).json({ error: 'Invalid user' });
     }
 
+    // 🔥 NORMALIZE PLAN HERE (IMPORTANT)
+    user.plan = normalizePlan(user.plan);
+
     req.user = user;
     next();
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
   }
 };
-
 // ==========================
 // PLAN PROTECTION (FIXED)
 // ==========================
-const requirePlan = (plan) => {
+const requirePlan = (requiredPlan) => {
   return (req, res, next) => {
-    if (req.user.plan !== plan) {
+    const userLevel = planHierarchy[req.user.plan];
+    const requiredLevel = planHierarchy[requiredPlan];
+
+    if (userLevel < requiredLevel) {
       return res.status(403).json({ error: 'Access denied' });
     }
+
     next();
   };
 };
@@ -94,39 +95,39 @@ app.get('/api/health', (req, res) => {
 // ==========================
 // REGISTER (FIXED)
 // ==========================
+// ==========================
+// REGISTER
+// ==========================
 app.post('/api/auth/register', async (req, res) => {
   try {
     let { email, password, plan } = req.body;
-
-    console.log("REGISTER BODY:", req.body); // 🔍 DEBUG
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Missing fields' });
     }
 
-    // 🔥 FORCE PLAN (CRITICAL FIX)
-    if (!plan) {
-      plan = 'basic';
-    }
+    plan = normalizePlan(plan);
 
-    const normalizedPlan = normalizePlan(plan);
+    // 🔥 CHECK DUPLICATE USER
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .single();
+
+    if (existingUser) {
+      return res.status(400).json({ error: 'User already exists' });
+    }
 
     const hashed = await bcrypt.hash(password, 10);
 
     const { data, error } = await supabase
       .from('users')
-      .insert([{
-        email,
-        password: hashed,
-        plan: normalizedPlan // ✅ NEVER NULL
-      }])
+      .insert([{ email, password: hashed, plan }])
       .select()
       .single();
 
-    if (error) {
-      console.error("SUPABASE ERROR:", error);
-      return res.status(400).json({ error: error.message });
-    }
+    if (error) throw error;
 
     const token = jwt.sign(
       { userId: data.id },
@@ -137,18 +138,18 @@ app.post('/api/auth/register', async (req, res) => {
     res.json({ token, user: data });
 
   } catch (err) {
-    console.error("REGISTER ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 });
 // ==========================
 // LOGIN (UNCHANGED BUT SAFE)
 // ==========================
+// ==========================
+// LOGIN
+// ==========================
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-
-    console.log("LOGIN:", email);
 
     const { data: user, error } = await supabase
       .from('users')
@@ -166,6 +167,8 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    user.plan = normalizePlan(user.plan);
+
     const token = jwt.sign(
       { userId: user.id },
       process.env.JWT_SECRET,
@@ -175,23 +178,38 @@ app.post('/api/auth/login', async (req, res) => {
     res.json({ token, user });
 
   } catch (err) {
-    console.error("LOGIN ERROR:", err);
     res.status(500).json({ error: err.message });
   }
 });
 // ==========================
-// PROTECTED ROUTES (FIXED)
 // ==========================
+// PROTECTED CONTENT ROUTES
+// ==========================
+
+// BASIC (everyone)
 app.get('/api/basic', authenticate, requirePlan('basic'), (req, res) => {
   res.json({ message: 'Basic content' });
 });
 
+// PREMIUM
 app.get('/api/premium', authenticate, requirePlan('premium'), (req, res) => {
   res.json({ message: 'Premium content' });
 });
 
+// ENTERPRISE
 app.get('/api/enterprise', authenticate, requirePlan('enterprise'), (req, res) => {
   res.json({ message: 'Enterprise content' });
+});
+
+// ==========================
+// 🔥 GET USER ACCESS DATA
+// ==========================
+app.get('/api/me', authenticate, (req, res) => {
+  res.json({
+    email: req.user.email,
+    plan: req.user.plan,
+    accessLevel: planHierarchy[req.user.plan]
+  });
 });
 
 // ==========================
