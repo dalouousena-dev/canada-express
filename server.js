@@ -164,7 +164,7 @@ app.post('/api/auth/register', async (req, res) => {
       { expiresIn: '7d' }
     );
 
-    const { password, ...safeUser } = newUser;
+    const { password: _, ...safeUser } = data;
 
 res.json({
   token,
@@ -209,7 +209,7 @@ app.post('/api/auth/login', async (req, res) => {
       { expiresIn: '7d' }
     );
 
-  const { password, ...safeUser } = user;
+ const { password: _, ...safeUser } = user;
 
 res.json({
   token,
@@ -293,7 +293,9 @@ app.get('/api/plans', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-
+app.get('/', (req, res) => {
+  res.send('CanadaExpress API is running');
+});
 app.listen(PORT, () => {
   console.log(`✓ Server running on port ${PORT}`);
 });
