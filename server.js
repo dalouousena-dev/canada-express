@@ -296,6 +296,50 @@ const PORT = process.env.PORT || 5000;
 app.get('/', (req, res) => {
   res.send('CanadaExpress API is running');
 });
+
+app.post("/api/payments/collect", async (req, res) => {
+  try {
+    const { amount, phone, operator } = req.body;
+
+    if (!amount || !phone || !operator) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
+
+    const response = await fetch("https://api.ashtechpay.top/v1/collect", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.ASHTECH_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        amount,
+        currency: "XAF",
+        phone,
+        operator,
+        reference: `ORDER_${Date.now()}`
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return res.status(400).json({
+        error: "Payment failed",
+        details: data
+      });
+    }
+
+    res.json({
+      message: "Payment initiated",
+      data
+    });
+
+  } catch (err) {
+    console.error("Payment error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`✓ Server running on port ${PORT}`);
 });
